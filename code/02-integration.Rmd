@@ -1,0 +1,111 @@
+---
+title: "Integration"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE, cache = FALSE}
+THREADS <- 30
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(batchelor)
+library(harmony)
+library(igraph)
+library(scater)
+library(scran)
+```
+
+## Load data
+
+```{r load-data}
+sce <- readRDS(file.path("outs", "01-sce.rds"))
+```
+
+# Integration
+
+## Feature selection
+
+```{r sel}
+# get highly variable features
+sce <- logNormCounts(sce)
+tbl <- modelGeneVar(sce, block = sce$sample_id, BPPARAM = bp)
+hv_gs <- rownames(sce)[tbl$bio > 0]
+is_hv <- rownames(sce) %in% hv_gs
+table(rowData(sce)["hv"] <- is_hv)
+```
+
+## Batch scaling
+
+```{r pca}
+# per-batch scaling normalization for
+# comparability to lowest-coverage batch
+sce <- multiBatchNorm(sce, batch = sce$sample_id, BPPARAM = bp)
+sce <- runPCA(sce, name = "PCA0", subset_row = hv_gs)
+```
+
+```{r elbow}
+pve <- attr(reducedDim(sce, "PCA0"), "percentVar")
+plot(pve, log = "y", xlab = "PC", ylab = "variance explained (%)")
+```
+
+```{r sub-pca}
+# use first 30 PCs
+pca <- reducedDim(sce)[, seq(30)]
+reducedDim(sce, "PCA") <- pca
+```
+
+## Correction
+
+```{r harmony}
+# run 'harmony' integration
+mtx <- HarmonyMatrix(pca, 
+  meta_data = sce$sample_id,
+  do_pca = FALSE, verbose = FALSE)
+reducedDim(sce, "PCA") <- mtx
+```
+
+# Dimension reduction
+
+```{r umap}
+for (. in c("0", "")) {
+  pca <- paste0("PCA", .)
+  map <- paste0("UMAP", .)
+  mtx <- calculateUMAP(
+    reducedDim(sce, pca), 
+    transposed = TRUE, 
+    BPPARAM = bp)
+  dimnames(mtx) <- list(
+    colnames(sce), 
+    paste0("UMAP", seq(ncol(mtx))))
+  reducedDim(sce, map) <- mtx
+}
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+saveRDS(sce, file.path("outs", "02-sce.rds"))
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

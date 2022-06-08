@@ -1,0 +1,138 @@
+---
+title: "Spatial"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 20
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(muscat)
+```
+
+## Load data
+
+```{r load-data}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+res1 <- readRDS(file.path("outs", "03-res1.rds"))
+res2 <- readRDS(file.path("outs", "03-res2.rds"))
+```
+
+## Wrangling
+
+```{r}
+xy <- sprintf("Center%s_local_px", c("X", "Y"))
+xy <- match(xy, names(colData(sce)))
+xy <- names(colData(sce))[xy] <- c("x", "y")
+```
+
+```{r}
+sce$SingleR1 <- factor(res1$pruned.labels)
+sce$SingleR2 <- factor(res2$pruned.labels)
+sce$subset <- factor(sce$subset)
+rownames(colData(sce)) <- NULL
+subs <- levels(sce$subset)
+names(subs) <- subs
+```
+
+```{r}
+sce$group_id0 <- sce$group_id
+sce$group_id <- factor(ifelse(sce$group_id == "HC", "HC", "IBD"))
+# i <- match(sids, sce$sample_id)
+# j <- c("sample_id", "group_id")
+# ei <- data.frame(colData(sce)[i, j])
+# metadata(sce)$experiment_info <- ei
+```
+
+```{r}
+sce <- prepSCE(sce0, kid = "SingleR1", drop = FALSE)
+```
+
+```{r}
+idx <- split(seq(ncol(sce)), sce$subset)
+lys <- lapply(idx, \(.) {
+  . <- sce[, .]
+  for (a in assayNames(.))
+    assay(., a) <- as.matrix(assay(., a))
+  return(.)
+})
+```
+
+```{r aggregation}
+pbs <- lapply(subs, \(.) {
+  aggregateData(lys[[.]], verbose = FALSE)
+})
+```
+
+```{r pb-mds}
+res <- lapply(subs, \(.) {
+  pbDS(pbs[[.]], verbose = FALSE)
+})
+```
+
+```{r hm, results = "asis"}
+for (s in subs[4]) {
+  # p <- tryCatch(
+  #   error = function(e) e,
+  p <- pbHeatmap(lys[[s]], res[[s]], 
+      #assay = "counts", fun = sum,
+      normalize = TRUE, fdr = 1, lfc = 0, top_n = 100)
+  #if (inherits(p, "error")) next
+  cat("## ", s, "\n"); print(p); cat("\n\n")
+}
+```
+
+```{r}
+tbl <- lapply(subs, \(.) {
+  resDS(lys[[.]], res[[.]])
+})
+```
+
+```{r}
+fil <- lapply(subs, \(.) {
+  df <- filter(tbl[[.]], 
+    p_adj.loc < 0.05, 
+    abs(logFC) > 1)
+  split(df, df$cluster_id)
+})
+```
+
+## Concordance {.tabset}
+
+```{r upset, results = "asis"}
+for (s in subs) {
+  cat("## ", s, "\n")
+  gs <- map(fil[[s]], "gene")
+  print(upset(fromList(gs)))
+  cat("\n\n")
+}
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

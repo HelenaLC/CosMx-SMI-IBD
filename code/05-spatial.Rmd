@@ -1,0 +1,141 @@
+---
+title: "Spatial"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(
+  message = FALSE, warning = FALSE,
+  cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 20
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(data.table)
+library(dplyr)
+library(scran)
+library(tidyr)
+```
+
+## Load data
+
+```{r load-sce}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+md <- readxl::read_xlsx(file.path("meta", "genes_fovs.xlsx"))
+```
+
+```{r load-img}
+img <- bpmapply(
+  BPPARAM = bp, SIMPLIFY = FALSE,
+  s = rep(sids, each = length(iids)),
+  i = rep(iids, length(sids)),
+  \(s, i) {
+    df <- readRDS(file.path("imgs", i, paste0(s, ".rds")))
+    data.frame(df, sample_id = s, image_id = i)
+  }) %>% bind_rows()
+```
+
+```{r prep-data}
+names(subs) <- subs <- levels(sce$subset)
+df <- data.frame(
+  colData(sce), check.names = FALSE) %>% 
+  mutate(sf = sprintf("%s(%s)", sample_id, fov))
+# filter for samples & FoVs of interest
+sf <- md[!is.na(md$fov), c("sample_id", "fov")]
+idx <- vapply(
+  split(sf, seq(nrow(sf))), 
+  \(.) df$fov == .$fov & 
+  df$sample_id == .$sample_id,
+  logical(nrow(df)))
+df <- df[rowAnys(idx), ]
+sf <- names(df <- split(df, df$sf))
+```
+
+# Images {.tabset}
+
+```{r plot-img, results = "asis", fig.width = 8, fig.height = 3}
+for (s in sids) {
+  df <- filter(img, sample_id == s)
+  fovs <- sort(unique(df$fov))
+  cat("## ", s, "{.tabset}\n")
+  for (f in fovs) {
+    fd <- filter(df, fov == f)
+    p <- ggplot(fd, 
+      aes(x, y, fill = z)) +
+      facet_grid(~ image_id) +
+      geom_tile_rast(width = 1, height = 1) +
+      scale_fill_identity() + 
+      coord_equal(expand = FALSE) +
+      theme_void() + theme(
+        strip.text = element_blank())
+    cat("### ", f, "\n")
+    print(p); cat("\n\n")
+  }
+}
+```
+
+# by subset {.tabset}
+
+```{r by-subset, results = "asis", fig.width = 8, fig.height = 4}
+cols <- c("tomato", "yellowgreen", "royalblue", "gold", "tan")
+for (. in sf) {
+  p <- .plot_xy(df[[.]], col = "subset") + 
+    scale_color_manual(values = cols)
+  cat("## ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+# by cluster 
+
+## global {.tabset}
+
+```{r by-cluster-global, results = "asis", fig.width = 8, fig.height = 4}
+for (. in sf) {
+  p <- .plot_xy(df[[.]], col = k <- "SingleR1") +
+    scale_color_manual(NULL, values = pal(sce, k))
+  cat("### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## split {.tabset}
+
+```{r by-cluster-split, results = "asis", fig.width = 8, fig.height = 4}
+for (. in sf[1]) {
+  cat("### ", ., "\n")
+  for (k in levels(df[[.]]$SingleR1)[5]) {
+    fd <- df[[.]]
+    fd$foo <- as.character(fd$subset)
+    fd$oof <- (i <- fd$SingleR1 == k)
+    fd$foo[i] <- k
+    fd <- fd[c(which(!i), which(i)), ]
+    cols <- c(pal(fd, "subset"), "gold")
+    names(cols) <- c(as.character(unique(fd$subset)), k)
+    p <- .plot_xy(fd, col = "foo", size = "oof") +
+      scale_color_manual(NULL, values = cols) +
+      scale_size_manual(NULL, values = c(0.5, 1.5))
+    cat("#### ", k, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+# Epilog
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

@@ -1,0 +1,274 @@
+---
+title: "Dimension reduction"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(
+  message = FALSE, warning = FALSE,
+  cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 1
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(dplyr)
+library(edgeR)
+library(scater)
+library(tidyr)
+```
+
+## Load data
+
+```{r load-data}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+```
+
+# Cell-level
+
+```{r down-size}
+# downsample to at most 10k cells per sample
+# & shuffle cells to avoid visual artefacts
+idx <- split(seq(ncol(sce)), sce$sample_id)
+idx <- lapply(idx, \(.) sample(., 1e4))
+sub <- sce[, sample(unlist(idx))]
+```
+
+## Quality control {.tabset}
+
+```{r qc, results = "asis", fig.width = 12, fig.height = 3}
+lt <- c("sum", "det")
+qc <- c(lt, c("avg", "frq"))
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- lapply(qc, \(.) {
+    t <- if (. %in% lt) "log1p"
+    .plot_xy(sub, xy, ., trans = t) + ggtitle(.) + 
+      scale_color_viridis_c(NULL, option = "B", limits = c(0, NA))
+  }) %>% wrap_plots(nrow = 1)
+  cat("### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## Immuno-staining {.tabset}
+
+```{r results = "asis", fig.width = 15, fig.height = 3}
+cd <- grep("^Mean", names(colData(sub)), value = TRUE)
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- lapply(cd, \(.)
+    .plot_xy(sub, xy, ., trans = "log10") +
+      scale_color_viridis_c(NULL, option = "B") +
+      ggtitle(gsub("^Mean\\.", "", .))) %>% 
+    wrap_plots(nrow = 1)
+  cat("### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## by group 
+
+### global {.tabset}
+
+```{r group-global, results = "asis", fig.width = 4, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- .plot_xy(sub, xy, "group_id") +
+    scale_color_manual(values = gpal)
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+### split {.tabset}
+
+```{r group-split, results = "asis", fig.width = 9, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- .plot_xy(sub, xy, z <- "group_id", z) +
+    scale_color_manual(values = gpal) +
+    theme(legend.position = "none")
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## by sample 
+
+### global {.tabset}
+
+```{r sample-global, results = "asis", fig.width = 4, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  p <- .plot_xy(sub, xy, "sample_id") +
+    scale_color_manual(values = spal)
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+### split {.tabset}
+
+```{r sample-split, results = "asis", fig.width = 6, fig.height = 5}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  p <- .plot_xy(sub, xy, z <- "sample_id", z) +
+    scale_color_manual(values = spal) +
+    theme(legend.position = "none")
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## by subset
+
+### global {.tabset}
+
+```{r subset-global, results = "asis", fig.width = 5, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- .plot_xy(sub, xy, z <- "subset") +
+    scale_color_manual(values = pal(sub, z))
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+### split {.tabset}
+
+```{r subset-split, results = "asis", fig.width = 16, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  p <- .plot_xy(sub, xy, z <- "subset", z) +
+    scale_color_manual(values = pal(sub, z))
+  p$facet$params$nrow <- 1
+  cat("#### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## by cluster (res1)
+
+### global {.tabset}
+
+```{r res1-global, results = "asis", fig.width = 5, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  ex <- c(paste0("Louvain", .), "SingleR2")
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., " {.tabset}\n")
+  for (k in setdiff(kids, ex)) {
+    p <- .plot_xy(sub, xy, k) +
+      scale_color_manual(values = pal(sub, k))
+    cat("##### ", k, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+### split {.tabset}
+
+```{r res1-split, results = "asis", fig.width = 6, fig.height = 5}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  ex <- c(paste0("Louvain", .), "SingleR2")
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., "{.tabset}\n")
+  for (k in setdiff(kids, ex)) {
+    p <- .plot_xy(sub, xy, k, "sample_id") +
+      scale_color_manual(values = pal(sub, k))
+    cat("##### ", k, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+## by cluster (res2)
+
+```{r}
+idx <- split(seq(ncol(sub)), sub$subset)
+lys <- lapply(idx, \(.) sub[, .])
+```
+
+### global {.tabset}
+
+```{r res2-global, results = "asis", fig.width = 5, fig.height = 3}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., " {.tabset}\n")
+  for (s in levels(sce$subset)) {
+    p <- .plot_xy(lys[[s]], xy, k <- "SingleR2") +
+      scale_color_manual(NULL, values = pal(lys[[s]], k))
+    cat("##### ", s, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+### split {.tabset}
+
+```{r res2-split, results = "asis", fig.width = 8, fig.height = 5}
+for (. in c("0", "")) {
+  xy <- paste0("UMAP", ., ".", c(1, 2))
+  . <- switch(., "0" = "before", "after")
+  cat("#### ", ., "{.tabset}\n")
+  for (s in levels(sce$subset)) {
+    p <- .plot_xy(lys[[s]], xy, k <- "SingleR2", "sample_id") +
+      scale_color_manual(NULL, values = pal(lys[[s]], k))
+    cat("##### ", s, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+# Pseudobulk-level
+
+```{r}
+.pbs_mds <- \(sce, by) {
+  y <- as.matrix(t(assay(sce)))
+  cd <- data.frame(colData(sce))
+  lys <- setNames(as.list(cd[by]), by)
+  pbs <- aggregate(y, lys, sum)
+  z <- t(as.matrix(pbs[, -seq_along(by)]))
+  d <- DGEList(z, remove.zeros = TRUE)
+  d <- calcNormFactors(d)
+  mds <- plotMDS.DGEList(d, plot = FALSE)
+  i <- match(pbs[[by[1]]], sub[[by[1]]])
+  j <- if (by[1] == "sample_id")
+    setdiff(names(cd), by) else TRUE
+  data.frame(pbs[by], cd[i, j],
+    MDS1 = mds$x, MDS2 = mds$y)
+}
+```
+
+## by sample
+
+```{r pb-mds}
+ggplot(
+  .pbs_mds(sub[rowData(sub)$hv, ], "sample_id"),
+  aes(MDS1, MDS2, label = sample_id, col = group_id)) +
+  geom_label_repel(size = 3, show.legend = FALSE) +
+  geom_point(size = 3, show.legend = FALSE) + 
+  coord_equal() + theme_linedraw() + theme(
+    panel.grid = element_blank(),
+    legend.key.size = unit(0.5, "lines"))
+```
+
+# Epilog
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

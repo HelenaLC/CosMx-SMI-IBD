@@ -1,0 +1,142 @@
+---
+title: "Analysis"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(
+  message = FALSE, warning = FALSE,
+  cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 20
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs}
+library(ks)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(spatstat.core)
+library(spatstat.geom)
+```
+
+## Load data
+
+```{r load-data}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+```
+
+```{r prep-data}
+df <- data.frame(colData(sce), check.names = FALSE) %>% 
+  mutate(sf = sprintf("%s(%s)", sample_id, fov))
+names(subs) <- subs <- levels(sce$subset)
+length(names(sf) <- sf <- unique(df$sf))
+```
+
+# Auto-correlation {.tabset}
+
+```{r}
+qt <- BiocParallel::bpmapply(
+  BPPARAM = bp,
+  SIMPLIFY = FALSE,
+  s = rep(subs, length(sf)),
+  sf = rep(sf, each = length(subs)),
+  \(sf, s) {
+    fd <- df[df$subset == s & df$sf == sf, ]
+    if (nrow(fd) < 10) return(NULL)
+    x <- fd$x; y <- fd$y; w <- owin(range(x), range(y))
+    p_val <- quadrat.test(ppp(x, y, w))$p.value
+    data.frame(sf, subset = s, p_val, n = nrow(fd))
+  })
+qt <- qt[!vapply(qt, is.null, logical(1))]
+qt <- do.call(rbind, qt)
+rownames(qt) <- NULL
+i <- match(qt$sf, df$sf)
+j <- c("sample_id", "fov")
+qt[, j] <- df[i, j]
+```
+
+```{r results = "asis", fig.width = 8, fig.height = 6}
+for (s in subs) {
+  tq <- qt %>% 
+    filter(subset == s) %>% 
+    filter(n > median(n)) %>% 
+    slice_min(p_val, n = 16, with_ties = FALSE)
+  fd <- right_join(df, tq, by = c("sf", "subset"))
+  p <- ggplot(fd, aes(x, y)) + 
+    facet_wrap(~ sf, scales = "free") + 
+    geom_point(col = "white", shape = 16, size = 0.5) + 
+    theme_void() + theme(panel.background = element_rect(fill = "black"))
+  cat("## ", s, "\n"); print(p); cat("\n\n")
+}
+```
+
+# Co-localization {.tabset}
+
+```{r calc-colo, eval = FALSE, include = FALSE}
+xy <- c("x", "y")
+is <- combn(length(subs), 2)
+pc <- BiocParallel::bpmapply(
+  BPPARAM = bp,
+  SIMPLIFY = FALSE,
+  sf = rep(sf, each = ncol(is)),
+  s1 = rep(subs[is[1, ]], length(sf)),
+  s2 = rep(subs[is[2, ]], length(sf)),
+  \(sf, s1, s2) {
+    fd <- df[df$sf == sf, ]
+    a <- fd[fd$subset == s1, xy]
+    b <- fd[fd$subset == s2, xy]
+    if (nrow(a) < 10 | nrow(b) < 10) return(NULL)
+    l <- c(min(a$x, b$x), min(a$y, b$y))
+    r <- c(max(a$x, b$x), max(a$y, b$y))
+    d1 <- c(kde(a, xmin = l, xmax = r)$estimate)
+    d2 <- c(kde(b, xmin = l, xmax = r)$estimate)
+    pc <- cor(d1, d2, method = "pearson")
+    data.frame(sf, s1, s2, pc)
+  })
+pc <- pc[!vapply(pc, is.null, logical(1))]
+pc <- do.call(rbind, pc)
+i <- match(pc$sf, df$sf)
+j <- c("sample_id", "fov")
+pc[, j] <- df[i, j]
+```
+
+```{r plot-colo, eval = FALSE, include = FALSE, results = "asis", fig.width = 8, fig.height = 24}
+pc$ss <- with(pc, paste(s1, s2, sep = ","))
+lys <- split(pc, pc$ss)
+ggplot(pc, aes(reorder_within(sf, pc, ss), pc)) +
+  facet_wrap(~ ss, ncol = 1, scales = "free_x") +
+  geom_bar(stat = "identity") +
+  scale_x_reordered(NULL) +
+  theme_linedraw(6) + theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+saveRDS(qt, file.path("outs", "07-qt.rds"))
+saveRDS(pc, file.path("outs", "07-pc.rds"))
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

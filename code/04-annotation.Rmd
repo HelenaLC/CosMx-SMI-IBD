@@ -1,0 +1,264 @@
+---
+title: "Annotation"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(
+  message = FALSE, warning = FALSE,
+  cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 1
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(dplyr)
+library(scran)
+library(tidyr)
+```
+
+## Load data
+
+```{r load-data}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+mgs <- readRDS(file.path("outs", "03-mgs.rds"))
+names(subs) <- subs <- levels(sce$subset)
+```
+
+# Contingency {.tabset}
+
+```{r results = "asis", fig.width = 12, fig.height = 6}
+ks <- combn(rev(kids), 2)
+for (. in rev(seq(ncol(ks)))) {
+  k1 <- ks[1, .]
+  k2 <- ks[2, .]
+  ns <- table(
+    from = sce[[k1]], 
+    to = sce[[k2]])
+  fq <- prop.table(ns, 1)
+  y <- as.matrix(fq)
+  xo <- hclust(dist(t(y)))$order
+  yo <- hclust(dist(y))$order
+  df <- data.frame(fq = c(fq), 
+    from = rep(rownames(fq), ncol(fq)),
+    to = rep(colnames(fq), each = nrow(fq)))
+  p <- ggplot(df, 
+    aes(from, to, fill = 100*fq)) +
+    geom_tile() +
+    scale_fill_viridis_c("proportion (%)\ny assigned to x") +
+    scale_x_discrete(limits = \(.) .[yo]) +
+    scale_y_discrete(limits = \(.) .[xo]) +
+    coord_equal(expand = FALSE, clip = "off") +
+    theme_linedraw() + theme(
+      axis.title = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_blank(),
+      legend.key.width = unit(0.5, "lines"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  cat("## ", paste0(k1, "-", k2), "\n"); print(p); cat("\n\n")
+}
+```
+
+# Abundances 
+
+## Heatmaps {.tabset}
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (k in kids) {
+  ns <- table(
+    sid = sce$sample_id, 
+    kid = sce[[k]])
+  fq <- prop.table(ns, 1)
+  fq <- .z(asin(sqrt(fq)))
+  y <- as.matrix(fq)
+  xo <- hclust(dist(y))$order
+  yo <- hclust(dist(t(y)))$order
+  df <- data.frame(fq = c(fq), 
+    sid = rep(colnames(fq), each = nrow(fq)),
+    kid = rep(rownames(fq), ncol(fq)))
+  p <- ggplot(df, 
+    aes(sid, kid, fill = fq)) +
+    geom_tile() +
+    scale_fill_gradient2(
+      "z-normalized\nproportion",
+      low = "red", high = "blue") +
+    scale_x_discrete(limits = \(.) .[yo]) +
+    scale_y_discrete(limits = \(.) .[xo]) +
+    coord_cartesian(expand = FALSE) +
+    theme_linedraw() + theme(
+      axis.title = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_blank(),
+      legend.key.width = unit(0.5, "lines"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  cat("### ", k, "\n"); print(p); cat("\n\n")
+}
+```
+
+## Barplots
+
+### by sample {.tabset}
+
+#### subsets
+
+```{r fig.width = 8, fig.height = 4}
+.plot_fq(sce, 
+  xy = c("sample_id", "subset"),
+  by = "group_id", order = FALSE)
+```
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (k in setdiff(kids, "SingleR2")) {
+  p <- .plot_fq(sce, 
+    xy = c("sample_id", k),
+    by = "group_id", order = FALSE)
+  cat("#### ", k, "\n"); print(p); cat("\n\n")
+}
+```
+
+#### SingleR2 {.tabset}
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (s in subs) { 
+  sub <- sce[, which(sce$subset == s)]
+  p <- .plot_fq(sub, 
+    xy = c("sample_id", "SingleR2"),
+    by = "group_id", order = FALSE)
+  cat("##### ", s, "\n"); print(p); cat("\n\n")
+}
+```
+
+### by FoV {.tabset}
+
+#### subsets {.tabset}
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (s in sids) {
+  cat("##### ", s, "\n")
+  sub <- sce[, sce$sample_id == s]
+  p <- .plot_fq(sub, 
+    xy = c("fov", "subset"),
+    by = NULL, order = TRUE)
+  print(p); cat("\n\n")
+}
+```
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (k in setdiff(kids, "SingleR2")) {
+  cat("#### ", k, "{.tabset}\n")
+  for (s in sids[1:2]) { 
+    sub <- sce[, sce$sample_id == s]
+    p <- .plot_fq(sub, 
+      xy = c("fov", k),
+      by = NULL, order = TRUE)
+    cat("##### ", s, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+#### SingleR2 {.tabset}
+
+```{r results = "asis", fig.width = 8, fig.height = 4}
+for (s in subs) { 
+  sub <- sce[, which(sce$subset == s)]
+  p <- .plot_fq(sub, 
+    xy = c("fov", "SingleR2"),
+    by = NULL, order = TRUE)
+  cat("##### ", s, "\n"); print(p); cat("\n\n")
+}
+```
+
+# Markers
+
+## Resolution 1
+
+```{r mgs-res1}
+names(ks) <- ks <- setdiff(kids, "SingleR2")
+```
+
+### global {.tabset}
+
+```{r mgs-res1-global, results = "asis", fig.width = 15, fig.height = 3}
+for (k in ks) {
+  p <- .plot_hm(sce, mgs[[k]], k, 10)
+  cat("#### ", k, "\n"); print(p); cat("\n\n")
+}
+```
+
+### split {.tabset}
+
+```{r mgs-res1-split, results = "asis", fig.width = 10, fig.height = 3}
+for (k in ks[3]) {
+  cat("#### ", k, " {.tabset}\n")
+  ls <- sort(names(mgs[[k]]))
+  for (l in ls) {
+    y <- match(l, rev(ls))
+    p <- .plot_hm(sce, mgs[[k]][l], k, 50) +
+      geom_rect(aes(
+        xmin = -Inf, xmax = Inf, 
+        ymin = y-0.5, ymax = y+0.5),
+        fill = NA, col = "black") +
+    cat("##### ", l, "\n")
+    print(p); cat("\n\n")
+  }
+}
+```
+
+## Resolution 2
+
+```{r mgs-res2, warning = FALSE}
+names(k) <- k <- "SingleR2"
+idx <- split(seq(ncol(sce)), sce$subset)
+lys <- lapply(idx, \(.) sce[, .])
+```
+
+### global {.tabset}
+
+```{r mgs-res2-global, results = "asis", fig.width = 15, fig.height = 3}
+for (s in subs) {
+  p <- .plot_hm(lys[[s]], mgs[[k]][[s]], k, 10)
+  cat("#### ", s, "\n"); print(p); cat("\n\n")
+}
+```
+
+### split {.tabset}
+
+```{r mgs-res2-split, results = "asis", fig.width = 10, fig.height = 3}
+for (s in subs) {
+  cat("#### ", s, " {.tabset}\n")
+  ls <- sort(names(mgs[[k]][[s]]))
+  for (l in ls) {
+    y <- match(l, rev(ls))
+    sgm <- mgs[[k]][[s]][l]
+    if (all(is.na(sgm[[1]]$FDR))) next
+    p <- .plot_hm(lys[[s]], sgm, k, 50) +
+      geom_rect(aes(
+        xmin = -Inf, xmax = Inf, 
+        ymin = y-0.5, ymax = y+0.5),
+        fill = NA, col = "black")
+    cat("##### ", l, "\n")
+    print(p); cat("\n\n")
+  }
+}
+```
+
+# Epilog
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

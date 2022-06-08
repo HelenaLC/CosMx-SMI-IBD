@@ -1,0 +1,145 @@
+---
+title: "Setup"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE, cache = FALSE}
+THREADS <- 1
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(BiocParallel)
+library(data.table)
+library(magick)
+library(SingleCellExperiment)
+```
+
+## Load data
+
+```{r}
+names(sid) <- sid <- list.dirs("data", FALSE, FALSE) # sample IDs
+names(iid) <- iid <- c("morphology", "segmentation") # image IDs
+```
+
+### SMI
+
+```{r load-data}
+dir <- list.dirs("data", recursive = FALSE)
+sce <- lapply(sid, \(s) {
+  y <- fread(file.path("data", s, "counts.csv"))
+  cd <- fread(file.path("data", s, "metadata.csv"))
+  # subset & sparsify
+  y <- y[y$cell_ID %in% cd$cell_ID, ]
+  y <- as.matrix(y[, -seq(2)])
+  y <- as(t(y), "dgCMatrix")
+  # construct SCE
+  gs <- rownames(y)
+  rd <- DataFrame(gene = gs, sample_id = s)
+  cs <- paste0("cell", seq(ncol(y)))
+  cd$cell <- colnames(y) <- cs
+  g <- gsub("[0-9]+", "", s)
+  cd$sample_id <- s
+  cd$group_id <- g
+  sce <- SingleCellExperiment(
+    assays = list(counts = y),
+    rowData = rd, colData = cd)
+  # separate negative probes
+  np <- grepl("^NegPrb", gs)
+  altExp(sce, "np") <- sce[np, ]
+  sce <- sce[!np, ]
+})
+```
+
+### Images
+
+```{r load-imgs, eval = FALSE}
+# image scale factor /
+# relative resolution
+sf <- IMG_RES
+foo <- lapply(sid, \(s) {
+  # get global FOV placement coordinates
+  pos <- read.csv(file.path("data", s, "positions.csv"))
+  foo <- lapply(iid, \(i) {
+    dir <- file.path("data", s, i)
+    fnm <- list.files(dir, full.names = TRUE)
+    lys <- lapply(fnm, \(.) {
+      # get FOV identifier
+      fov <- as.integer(gsub("[^0-9]", "", basename(.)))
+      # read, rescale & rasterize image
+      fs <- paste0(sf * 100, "%x")
+      . <- image_read(.)
+      . <- image_scale(., fs)
+      . <- as.raster(.)
+      # get xy-coordinates
+      x <- pos$x_global_px[match(fov, pos$fov)] * sf
+      y <- pos$y_global_px[match(fov, pos$fov)] * sf
+      x <- x + rep(seq(ncol(.)), nrow(.))
+      y <- y + rep(rev(seq(nrow(.))), each = ncol(.))
+      # save as tidy table
+      data.table(x, y, z = c(.), sf, fov)
+    })
+    dt <- do.call(rbind, lys)
+    out <- paste0(s, ".rds")
+    out <- file.path("imgs", i, out)
+    saveRDS(dt, out)
+  })
+})
+```
+
+# Quality control
+
+```{r qc}
+sce <- bplapply(sce, BPPARAM = bp, \(sce) {
+  lys <- list(sce, altExp(sce))
+  lys <- lapply(lys, \(sce) {
+    z <- (y <- assay(sce)) != 0 
+    # gene-level
+    rd <- data.frame(
+      sum = rowSums(y),
+      avg = rowMeans(y),
+      det = rowSums(z),
+      frq = rowMeans(z))
+    # cell-level
+    cd <- data.frame(
+      sum = colSums(y),
+      avg = colMeans(y),
+      det = colSums(z),
+      frq = colMeans(z))
+    rowData(sce) <- cbind(rowData(sce), rd)
+    colData(sce) <- cbind(colData(sce), cd)
+    return(sce)
+  })
+  sce <- lys[[1]]
+  altExp(sce) <- lys[[2]]
+  return(sce)
+})
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+saveRDS(sce, file.path("outs", "00-sce.rds"))
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

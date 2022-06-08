@@ -1,0 +1,218 @@
+---
+title: "Quality"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 30
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(SingleCellExperiment)
+```
+
+## Load data
+
+```{r load-data}
+lys <- readRDS(file.path("outs", "00-sce.rds"))
+```
+
+## Helpers
+
+```{r helpers, collapse = TRUE}
+# quality control metrics
+lt <- c("sum", "det")
+qc <- c(lt, c("avg", "frq"))
+# extract gene/cell metadata,
+# log-transform & reformat
+.md <- \(dat, dim) {
+  .md <- list(rowData, colData)[[dim]]
+  lys <- lapply(dat, \(.) data.frame(.md(.)))
+  do.call(rbind, lys) %>% 
+    mutate_at(all_of(lt), log1p) %>% 
+    pivot_longer(all_of(qc))
+}
+# join & tidy data from 
+# reporters & negative controls
+.df <- \(dat, dim) {
+  list(
+    "FALSE" = .md(dat[[1]], dim),
+    "TRUE" = .md(dat[[2]], dim)) %>% 
+  bind_rows(.id = "is_np") %>% 
+  mutate_at("is_np", as.logical)
+}
+# overview of cell & reporter 
+# / negative control counts
+.tbl <- \(df, val = "sum")
+  filter(df, name == val) %>% 
+  group_by(is_np, sample_id) %>% 
+  summarise(
+    .groups = "drop", n = n(),
+    mean = round(mean(value), 2)) %>% 
+  pivot_wider(
+    names_from = "is_np", 
+    values_from = "mean") %>% 
+  dplyr::rename(
+    control = "TRUE",
+    reporter = "FALSE")
+```
+
+# Quality control
+
+```{r wrangling}
+# separate negative controls
+dat <- list(lys, lapply(lys, altExp))
+# prettify gene/cell metadata
+rd <- .df(dat, 1)
+cd <- .df(dat, 2)
+```
+
+## Gene-level
+
+```{r plot-rd, collapse = TRUE, fig.width = 8, fig.height = 5}
+ggplot(rd, aes(y = value, fill = is_np,
+  reorder_within(sample_id, value, name))) +
+  facet_wrap(~ name, scales = "free") +
+  geom_boxplot(size = 0.2, 
+    outlier.size = 0.2, outlier.shape = 16) +
+  scale_x_reordered() + theme_bw() + theme(
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(), 
+    legend.key.size = unit(0.5, "lines"),
+    axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Cell-level
+
+```{r hm1, collapse = TRUE, fig.width = 8, fig.height = 3}
+gg <- cd %>% filter(
+  is_np, name == "sum") %>% 
+  group_by(sample_id, fov) %>% 
+  summarise_at("value", mean)
+ggplot(gg, aes(factor(fov), sample_id, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis_c(
+    "mean negative\ncontrol count",
+    option = "A", limits = c(0, NA)) +
+  coord_equal(expand = FALSE) +
+  theme_bw() + theme(
+    axis.title = element_blank(),
+    panel.grid = element_blank())
+```
+
+```{r hm2, collapse = TRUE, fig.width = 8, fig.height = 3}
+gg <- cd %>% filter(
+  !is_np, name == "frq") %>% 
+  group_by(sample_id, fov) %>% 
+  summarise_at("value", mean)
+ggplot(gg, aes(factor(fov), sample_id, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis_c(
+    "mean RNA\ndetection\nfrequency",
+    option = "A", limits = c(0, NA)) +
+  coord_equal(expand = FALSE) +
+  theme_bw() + theme(
+    axis.title = element_blank(),
+    panel.grid = element_blank())
+```
+
+```{r plot-cd, collapse = TRUE, fig.width = 8, fig.height = 5}
+ggplot(cd, aes(y = value, fill = is_np,
+  reorder_within(sample_id, value, name))) +
+  facet_wrap(~ name, scales = "free") +
+  geom_boxplot(size = 0.2, 
+    outlier.size = 0.2, outlier.shape = 16) +
+  scale_x_reordered() + theme_bw() + theme(
+    axis.title = element_blank(),
+    panel.grid.minor = element_blank(), 
+    legend.key.size = unit(0.5, "lines"),
+    axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Filtering
+
+```{r fil}
+sub <- BiocParallel::bplapply(lys, BPPARAM = bp, \(sce) {
+  # keep cells with average negative control count below 0.5
+  sce <- sce[, colData(altExp(sce))$avg <= 0.5]
+  # keep cells with at least 20 detected features
+  sce <- sce[, colSums(assay(sce) > 0) >= 20]
+  return(sce)
+})
+```
+
+## Summary
+
+```{r summary, results = "asis"}
+list(
+  before = .tbl(.df(list(lys, lapply(lys, altExp)), 2)),
+  after = .tbl(.df(list(sub, lapply(sub, altExp)), 2))) %>% 
+  bind_rows(.id = ".") %>% 
+  pivot_wider(
+    names_from = ".", names_sep = ".", 
+    values_from = c("n", "reporter", "control")) %>% 
+  mutate(
+    .after = "n.after", 
+    "%" = round(100 * n.after / n.before, 2)) %>% 
+  knitr::kable()
+```
+
+## Collect
+
+```{r collect}
+# drop negative controls & gene metadata
+sub <- lapply(sub, \(sce) {
+  altExp(sce) <- NULL
+  rowData(sce) <- NULL
+  return(sce)
+})
+# collect samples
+(sce <- do.call(cbind, sub))
+```
+
+```{r prep-data}
+# factorize group & sample IDs
+gids <- c("HC", "CD", "UC")
+sids <- unique(sce$sample_id)
+sids <- sids[sapply(gids, grep, sids)]
+sce$group_id <- factor(sce$group_id, gids)
+sce$sample_id <- factor(sce$sample_id, sids)
+# rename spatial coordinate
+xy <- sprintf("Center%s_global_px", c("X", "Y"))
+i <- match(xy, names(colData(sce)))
+names(colData(sce))[i] <- c("x", "y")
+# drop 'colData' rownames for 'scater::ggcells'
+rownames(colData(sce)) <- NULL
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+saveRDS(sce, file.path("outs", "01-sce.rds"))
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

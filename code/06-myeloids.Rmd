@@ -1,0 +1,190 @@
+---
+title: "Myeloids"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 1
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(tidyr)
+```
+
+## Load data
+
+```{r load-data, message = FALSE}
+sce <- readRDS(file.path("outs", "03-sce.rds"))
+md <- readxl::read_xlsx(file.path("meta", "genes_fovs.xlsx"))
+```
+
+## Filtering
+
+```{r fil}
+# samples & FoVs of interest
+(sf <- md[!is.na(md$fov), c("sample_id", "fov")])
+# features of interest
+gs <- md$gene_myeloids
+setdiff(gs, rownames(sce)) 
+(gs <- intersect(gs, rownames(sce)))
+idx <- vapply(
+    split(sf, seq(nrow(sf))), 
+    \(.) sce$fov == .$fov & 
+    sce$sample_id == .$sample_id,
+    logical(ncol(sce)))
+sub <- sce[gs, rowAnys(idx)]
+cbind(all = dim(sce), sub = dim(sub))
+table(sample_id = sub$sample_id, FoV = sub$fov)
+```
+
+```{r prep-data}
+es <- .scale01(as.matrix(logcounts(sub)))
+df <- data.frame(
+  colData(sub), t(es), check.names = FALSE) %>% 
+  mutate(sf = sprintf("%s(%s)", sample_id, fov))
+sf <- names(df <- split(df, df$sf))
+```
+
+# myeloids {.tabset}
+
+```{r myeloids, results = "asis", fig.width = 6, fig.height = 3}
+for (. in sf) {
+  fd <- df[[.]]
+  fd$foo <- fd$subset == "myeloids"
+  if (sum(fd$foo) < 10) next
+  fd <- fd[order(fd$foo), ]
+  p <- .plot_xy(fd, col = "foo", size = "foo")
+  cat("## ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+# by cluster
+
+## global {.tabset}
+
+```{r by-cluster-global, results = "asis", fig.width = 6.5, fig.height = 3}
+for (. in sf) {
+  fd <- df[[.]]
+  fd$foo <- NA
+  fd$oof <- fd$subset == "myeloids"
+  if (sum(fd$oof) < 10) next
+  fd$foo[fd$oof] <- as.character(fd$SingleR2[fd$oof])
+  fd <- fd[order(fd$foo, na.last = FALSE), ]
+  p <- .plot_xy(fd, col = "foo", size = "oof", nas = TRUE)
+  cat("### ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+## split {.tabset}
+
+```{r by-cluster-split, results = "asis", message = FALSE, fig.width = 6, fig.height = 3}
+for (. in sf) {
+  fd <- data.frame(df[[.]], foo = NA)
+  idx <- fd$subset == "myeloids"
+  if (sum(idx) < 10) next
+  cat("### ", ., "{.tabset}\n")
+  fd$foo[idx] <- "myeloids"
+  ks <- unique(fd$SingleR2[idx])
+  ks <- setdiff(ks, NA)
+  for (. in ks) {
+    tmp <- fd
+    tmp$foo[tmp$SingleR2 == .] <- .
+    tmp$foo <- factor(tmp$foo, c("myeloids", ., NA), exclude = NULL)
+    tmp <- tmp[order(tmp$foo, na.last = FALSE), ]
+    p <- .plot_xy(tmp, col = "foo", size = "foo", nas = TRUE) +
+      scale_size_manual(values = c(0.75, 1.5), na.value = 0.25) +
+      scale_color_manual(values = c("tomato", "royalblue"), na.value = "white")
+    cat("#### ", ., "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+# by expression {.tabset}
+
+```{r by-expr, results = "asis", fig.width = 6, fig.height = 3}
+ks <- c(
+  "M0", "M1", "M2", 
+  "Macrophage NRG1", 
+  "Inflammatory monocytes")
+for (. in sf) {
+  tmp <- df[[.]]
+  tmp$oof <- tmp$SingleR2 %in% ks
+  if (sum(tmp$oof) < 10) next
+  cat("## ", ., "{.tabset}\n")
+  for (g in gs) {
+    tmq <- tmp
+    tmq$foo <- tmp[[g]]
+    tmq$foo[!tmp$oof] <- NA
+    tmq <- tmq[order(tmq$foo, na.last = FALSE),]
+    p <- .plot_xy(tmq, col = "foo", size = "oof", nas = TRUE) +
+      scale_color_distiller("scaled\nexpression", 
+        limits = c(0, 1), na.value = "white",
+        palette = "YlOrRd", direction = 1) +
+      theme(legend.position = "right",   
+        legend.key.height = unit(1, "lines"),
+        legend.key.width = unit(0.5, "lines"))
+    cat("### ", g, "\n"); print(p); cat("\n\n")
+  }
+}
+```
+
+```{r hm, include = FALSE, results = "asis", fig.width = 12, fig.height = 3}
+for (. in sf) {
+    tmp <- filter(df[[.]], subset == "myeloids")
+    tmq <- pivot_longer(tmp, all_of(gs))
+    mat <- tmp[, rownames(es)]
+    xo <- tmp$cell_ID[hclust(dist(mat))$order]
+    yo <- hclust(dist(t(mat)))$order
+    p1 <- ggplot(tmp, 
+        aes(factor(cell_ID), 1, fill = SingleR2)) +
+        geom_tile() + theme_void() +
+        scale_fill_brewer(NULL, palette = "Paired") 
+    p2 <- ggplot(tmq,
+        aes(factor(cell_ID), name, fill = value)) +
+        scale_y_discrete(limits = \(.) .[yo]) +
+        geom_tile() +
+        scale_fill_distiller(
+            "scaled\nexpression",
+            limits = c(0, 1),
+            na.value = "grey75", 
+            palette = "Blues",
+            direction = 1) +
+        theme(
+            axis.title = element_blank(),
+            axis.text.x = element_blank(),
+            axis.ticks.x = element_blank())
+    p <- wrap_plots(p1, p2, ncol = 1) +
+        plot_layout(
+            guides = "collect", 
+            heights = c(1, length(gs))) &
+        scale_x_discrete(limits = \(.) xo) & 
+        theme(legend.key.size = unit(0.5, "lines"))
+    cat("## ", ., "\n"); print(p); cat("\n\n")
+}
+```
+
+# Epilog
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

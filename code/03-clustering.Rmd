@@ -1,0 +1,188 @@
+---
+title: "Clustering"
+author: 
+  - name: "Helena Lucia Crowell"
+    affiliation: "Department of Molecular Life Sciencies, University of Zurich, Zurich, Switzerland"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_knit$set(root.dir = dirname(getwd()))
+knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+```
+
+```{r utils, include = FALSE}
+THREADS <- 40
+source(
+  file.path("code", "utils.R"), 
+  local = knitr::knit_global())
+```
+
+# Preamble
+
+## Dependencies
+
+```{r load-libs, message = FALSE, warning = FALSE}
+library(bluster)
+library(dplyr)
+library(igraph)
+library(SingleR)
+library(scran)
+```
+
+## Load data
+
+```{r load-data}
+ref <- readRDS(file.path("data", "ref.rds"))
+sce <- readRDS(file.path("outs", "02-sce.rds"))
+tbl <- read.csv(file.path("meta", "subsets.csv"))
+```
+
+```{r prep-data}
+gs <- intersect(rownames(sce), rownames(ref))
+ref$group_id <- gsub("a$", "", ref$Health)
+rnm <- match("sample", names(colData(ref)))
+names(colData(ref))[rnm] <- "sample_id"
+names(subs) <- subs <- unique(tbl$subset)
+```
+
+```{r eval = FALSE}
+# downsample for testing
+sce <- sce[, unlist(lapply(
+  split(seq(ncol(sce)), sce$sample_id), 
+  \(.) sample(., min(length(.), 200))))]
+ref <- ref[, unlist(lapply(
+  split(seq(ncol(ref)), ref$sample_id), 
+  \(.) sample(., min(length(.), 200))))]
+```
+
+# Unsupervised
+
+```{r Louvain}
+for (. in c("0", "")) {
+  pca <- paste0("PCA", .)
+  kid <- paste0("Louvain", .)
+  g <- SNNGraphParam(type = "jaccard", cluster.fun = "louvain", BPPARAM = bp)
+  ids <- clusterCells(sce, use.dimred = pca, BLUSPARAM = g)
+  sce[[kid]] <- factor(ids, sort(unique(ids)))
+}
+```
+
+# Label transfer
+
+```{r hvgs}
+ref <- logNormCounts(ref)
+var <- modelGeneVar(ref, 
+  block = ref$sample_id, 
+  BPPARAM = bp)
+hv_gs <- rownames(ref)[var$bio > 0]
+is_hv <- rownames(ref) %in% hv_gs
+table(rowData(ref)["hv"] <- is_hv)
+hv_gs <- intersect(hv_gs, gs)
+```
+
+## Resolution 1
+
+```{r res1-labs}
+colLabels(ref) <- ref$annotation_general_1
+```
+
+```{r res1-mgs}
+# find low-resolution markers
+mgs1 <- findMarkers(ref, 
+  block = ref$sample, 
+  subset.row = hv_gs,
+  BPPARAM = bp)
+# select top 100 per cluster
+fil1 <- lapply(mgs1, \(df) rownames(df)[df$Top <= 100])
+```
+
+```{r res1-SingleR, warning = FALSE}
+res1 <- SingleR(
+  test = sce, ref = ref, 
+  labels = colLabels(ref), 
+  genes = fil1, BPPARAM = bp)
+```
+
+## Resolution 2
+
+```{r res2-labs}
+ann <- ref$new_annotation_intermediate
+ann[(idx <- grep("S2", ann))] <- ref$new_annotation_refined[idx]
+colLabels(ref) <- ann
+```
+
+```{r res2-subs}
+# assign subsets
+idx <- match(
+  res1$pruned.labels, 
+  tbl$annotation_general_1)
+sce$subset <- factor(tbl$subset[idx])
+# split cell indices by subset
+is <- split(seq(ncol(sce)), sce$subset)[subs]
+js <- split(seq(ncol(ref)), ref$subset)[subs]
+```
+
+```{r res2-mgs}
+# for each subset, 
+# find high-resolution markers
+mgs2 <- lapply(js, \(.) 
+  findMarkers(ref[, .], 
+    block = ref$sample_id[.], 
+    subset.row = is_hv, 
+    BPPARAM = bp))
+# select top 100 per cluster
+fil1 <- lapply(mgs2, \(dfs) lapply(dfs, \(df) rownames(df)[df$Top <= 100]))
+```
+
+```{r res2-SingleR, warning = FALSE}
+lys <- lapply(subs, \(.) {
+  df <- SingleR(
+    test = sce[, is[[.]]], 
+    ref = ref[, js[[.]]], 
+    labels = colLabels(ref)[js[[.]]], 
+    genes = fil1[[.]], 
+    BPPARAM = bp)
+  data.frame(df, check.names = FALSE)
+}) 
+res2 <- bind_rows(lys, .id = "subset")[order(unlist(is)), ]
+```
+
+```{r res1-res2}
+sce$SingleR1 <- factor(res1$pruned.labels, exclude = NULL)
+sce$SingleR2 <- factor(res2$pruned.labels, exclude = NULL)
+knitr::kable(table(sce$SingleR1, sce$SingleR2))
+```
+
+# Markers
+
+```{r mgs}
+names(ks) <- ks <- paste0("Louvain", c("0", ""))
+mgs0 <- lapply(ks, \(k) {
+  findMarkers(sce, 
+    groups = sce[[k]],
+    block = sce$sample_id,
+    subset.row = rowData(sce)$hv,
+    BPPARAM = bp)
+})
+mgs <- c(mgs0, 
+  SingleR1 = mgs1, 
+  list(SingleR2 = mgs2))
+```
+
+# Epilog
+
+## Save data
+
+```{r save-data}
+saveRDS(sce, file.path("outs", "03-sce.rds"))
+saveRDS(mgs, file.path("outs", "03-mgs.rds"))
+saveRDS(res1, file.path("outs", "03-res1.rds"))
+saveRDS(res2, file.path("outs", "03-res2.rds"))
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```
