@@ -159,7 +159,7 @@ for (s in sids) {
 ```{r results = "asis", fig.width = 8, fig.height = 4}
 for (k in setdiff(kids, "SingleR2")) {
   cat("#### ", k, "{.tabset}\n")
-  for (s in sids[1:2]) { 
+  for (s in sids) { 
     sub <- sce[, sce$sample_id == s]
     p <- .plot_fq(sub, 
       xy = c("fov", k),
@@ -171,13 +171,20 @@ for (k in setdiff(kids, "SingleR2")) {
 
 #### SingleR2 {.tabset}
 
-```{r results = "asis", fig.width = 8, fig.height = 4}
-for (s in subs) { 
-  sub <- sce[, which(sce$subset == s)]
-  p <- .plot_fq(sub, 
-    xy = c("fov", "SingleR2"),
-    by = NULL, order = TRUE)
-  cat("##### ", s, "\n"); print(p); cat("\n\n")
+```{r results = "asis", fig.width = 6, fig.height = 4}
+for (. in subs) {
+  cat("##### ", ., "{.tabset}\n")
+  i <- sce$subset == .
+  for (s in sids) {
+    cat("###### ", s, "\n")
+    j <- sce$sample_id == s
+    sub <- sce[, i & j]
+    p <- .plot_fq(sub, 
+      xy = c("fov", "SingleR2"),
+      by = NULL, order = TRUE) +
+      theme(aspect.ratio = 1)
+    print(p); cat("\n\n")
+  }
 }
 ```
 
@@ -201,7 +208,7 @@ for (k in ks) {
 ### split {.tabset}
 
 ```{r mgs-res1-split, results = "asis", fig.width = 10, fig.height = 3}
-for (k in ks[3]) {
+for (k in ks) {
   cat("#### ", k, " {.tabset}\n")
   ls <- sort(names(mgs[[k]]))
   for (l in ls) {
@@ -229,7 +236,7 @@ lys <- lapply(idx, \(.) sce[, .])
 
 ```{r mgs-res2-global, results = "asis", fig.width = 15, fig.height = 3}
 for (s in subs) {
-  p <- .plot_hm(lys[[s]], mgs[[k]][[s]], k, 10)
+  p <- .plot_hm(lys[[s]], mgs[[k]][[s]], k, 20)
   cat("#### ", s, "\n"); print(p); cat("\n\n")
 }
 ```

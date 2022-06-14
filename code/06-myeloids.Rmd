@@ -8,7 +8,9 @@ date: "`r format(Sys.Date(), '%B %d, %Y')`"
 
 ```{r setup, include = FALSE}
 knitr::opts_knit$set(root.dir = dirname(getwd()))
-knitr::opts_chunk$set(cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
+knitr::opts_chunk$set(
+  message = FALSE, warning = FALSE,
+  cache = TRUE, autodep = TRUE, cache.lazy = FALSE)
 ```
 
 ```{r utils, include = FALSE}
@@ -111,7 +113,10 @@ for (. in sf) {
     tmp <- tmp[order(tmp$foo, na.last = FALSE), ]
     p <- .plot_xy(tmp, col = "foo", size = "foo", nas = TRUE) +
       scale_size_manual(values = c(0.75, 1.5), na.value = 0.25) +
-      scale_color_manual(values = c("tomato", "royalblue"), na.value = "white")
+      guides(size = "none") + 
+      scale_color_manual(
+        NULL, na.value = "lightgrey",
+        values = c("tomato", "royalblue"))
     cat("#### ", ., "\n"); print(p); cat("\n\n")
   }
 }

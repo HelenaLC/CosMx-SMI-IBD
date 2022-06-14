@@ -92,6 +92,7 @@ colLabels(ref) <- ref$annotation_general_1
 mgs1 <- findMarkers(ref, 
   block = ref$sample, 
   subset.row = hv_gs,
+  direction = "up",
   BPPARAM = bp)
 # select top 100 per cluster
 fil1 <- lapply(mgs1, \(df) rownames(df)[df$Top <= 100])
@@ -107,8 +108,8 @@ res1 <- SingleR(
 ## Resolution 2
 
 ```{r res2-labs}
-ann <- ref$new_annotation_intermediate
-ann[(idx <- grep("S2", ann))] <- ref$new_annotation_refined[idx]
+idx <- grep("S2", ann <- ref$new_annotation_intermediate)
+ann[idx] <- ref$new_annotation_refined[idx]
 colLabels(ref) <- ann
 ```
 
@@ -126,11 +127,24 @@ js <- split(seq(ncol(ref)), ref$subset)[subs]
 ```{r res2-mgs}
 # for each subset, 
 # find high-resolution markers
-mgs2 <- lapply(js, \(.) 
-  findMarkers(ref[, .], 
-    block = ref$sample_id[.], 
-    subset.row = is_hv, 
-    BPPARAM = bp))
+mgs2 <- lapply(subs, \(s) {
+  ref <- ref[, js[[s]]]
+  idx <- seq(ncol(ref))
+  idx <- if (s == "myeloids") {
+    sub <- c(
+      "M0", "M1", "M2", 
+      "Macrophage NRG1", 
+      "Inflammatory monocytes")
+    split(idx, colLabels(ref) %in% sub)
+  } else list(idx)
+  lys <- lapply(idx, \(.) 
+    findMarkers(ref[, .],
+      block = ref$sample_id[.], 
+      subset.row = is_hv, 
+      direction = "up",
+      BPPARAM = bp))
+  Reduce(c, lys)
+})
 # select top 100 per cluster
 fil1 <- lapply(mgs2, \(dfs) lapply(dfs, \(df) rownames(df)[df$Top <= 100]))
 ```
@@ -163,6 +177,7 @@ mgs0 <- lapply(ks, \(k) {
     groups = sce[[k]],
     block = sce$sample_id,
     subset.row = rowData(sce)$hv,
+    direction = "up",
     BPPARAM = bp)
 })
 mgs <- c(mgs0, 

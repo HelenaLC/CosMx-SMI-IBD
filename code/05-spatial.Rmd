@@ -39,7 +39,7 @@ md <- readxl::read_xlsx(file.path("meta", "genes_fovs.xlsx"))
 ```
 
 ```{r load-img}
-img <- bpmapply(
+img <- BiocParallel::bpmapply(
   BPPARAM = bp, SIMPLIFY = FALSE,
   s = rep(sids, each = length(iids)),
   i = rep(iids, length(sids)),
@@ -69,12 +69,12 @@ sf <- names(df <- split(df, df$sf))
 
 ```{r plot-img, results = "asis", fig.width = 8, fig.height = 3}
 for (s in sids) {
-  df <- filter(img, sample_id == s)
-  fovs <- sort(unique(df$fov))
+  tmp <- filter(img, sample_id == s)
+  fovs <- sort(unique(tmp$fov))
   cat("## ", s, "{.tabset}\n")
   for (f in fovs) {
-    fd <- filter(df, fov == f)
-    p <- ggplot(fd, 
+    tmq <- filter(tmp, fov == f)
+    p <- ggplot(tmq, 
       aes(x, y, fill = z)) +
       facet_grid(~ image_id) +
       geom_tile_rast(width = 1, height = 1) +
@@ -114,7 +114,7 @@ for (. in sf) {
 ## split {.tabset}
 
 ```{r by-cluster-split, results = "asis", fig.width = 8, fig.height = 4}
-for (. in sf[1]) {
+for (. in sf) {
   cat("### ", ., "\n")
   for (k in levels(df[[.]]$SingleR1)[5]) {
     fd <- df[[.]]
